@@ -119,27 +119,21 @@ class SolaXModbusSensorEntityDescription(BaseModbusSensorEntityDescription):
 # ====================================== Computed value functions  =================================================
 
 
-def value_function_remotecontrol_recompute(initval, descr, datadict):
+def autorepeat_function_remotecontrol_recompute(initval, descr, datadict):
     # initval = BUTTONREPEAT_FIRST means first run; 
     # initval = BUTTONREPEAT_LOOP means subsequent runs for button autorepeat value functions
     # initval = BUTTONREPEAT_POST means final call for cleanup, normally no action needed
+
+    # terminate expiring loop by disabling remotecontrol
+    if initval == BUTTONREPEAT_POST: return { 'action': WRITE_MULTI_MODBUS, 'data': [  ( "remotecontrol_power_control", "Disabled", ), ] }
+
     power_control = datadict.get("remotecontrol_power_control", "Disabled")
     set_type = datadict.get("remotecontrol_set_type", "Set")  # other options did not work
     target = datadict.get("remotecontrol_active_power", 0)
     reactive_power = datadict.get("remotecontrol_reactive_power", 0)
     rc_duration = datadict.get("remotecontrol_duration", 20)
     reap_up = datadict.get("reactive_power_upper", 0)
-    reap_lo = datadict.get("reactive_power_lower", 0)
-    # terminate expiring loop by disabling remotecontrol
-    if initval == BUTTONREPEAT_POST: return [  
-        ( "remotecontrol_power_control", "Disabled", ),
-        ( "remotecontrol_set_type", set_type, ),
-        ( "remotecontrol_active_power", target, ),  
-        ( "remotecontrol_reactive_power", max(min(reap_up, reactive_power), reap_lo),),
-        ( "remotecontrol_duration", rc_duration,),
-        ( "remotecontrol_timeout", 0,),
-    ]
- 
+    reap_lo = datadict.get("reactive_power_lower", 0) 
     import_limit = datadict.get("remotecontrol_import_limit", 20000)
     meas = datadict.get("measured_power", 0)
     pv = datadict.get("pv_power_total", 0)
@@ -220,22 +214,20 @@ def value_function_remotecontrol_recompute(initval, descr, datadict):
         datadict["remotecontrol_power_control_mode"] = "Disabled" # disable the mode8 remotecontrol loop 
         autorepeat_stop(datadict, "powercontrolmode8_trigger")
     _LOGGER.debug(f"Evaluated remotecontrol_trigger: corrected/clamped values: {res}")
-    return res
+    return { 'action': WRITE_MULTI_MODBUS, 'data': res }
 
 
 
-def value_function_powercontrolmode8_recompute(initval, descr, datadict):
+def autorepeat_function_powercontrolmode8_recompute(initval, descr, datadict):
     # initval = BUTTONREPEAT_FIRST means first run; 
     # initval = BUTTONREPEAT_LOOP means subsequent runs for button autorepeat value functions
     # initval = BUTTONREPEAT_POST means final call for cleanup, normally no action needed
-    if initval == BUTTONREPEAT_POST: 
-        datadict["remotecontrol_power_control_mode"] = "Disabled" 
-        return [ ( "remotecontrol_power_control_mode", "Disabled", ) ]
+    if initval == BUTTONREPEAT_POST: return { 'action': WRITE_MULTI_MODBUS, 'data' :[ ( "remotecontrol_power_control_mode", "Disabled", ) ] }
     # See mode 8 and 9 of doc https://kb.solaxpower.com/solution/detail/2c9fa4148ecd09eb018edf67a87b01d2
     power_control = datadict.get("remotecontrol_power_control_mode", "Disabled")
     curmode = datadict.get("modbus_power_control", "unknown")
     set_type = datadict.get("remotecontrol_set_type", "Set")  # Set for simplicity; otherwise First time should be Set, subsequent times Update
-    pvlimit = datadict.get("remotecontrol_pv_power_limit",10000)
+    setpvlimit = datadict.get("remotecontrol_pv_power_limit",10000)
     pushmode_power = datadict.get("remotecontrol_push_mode_power_8_9", 0)
     target_soc = datadict.get("remotecontrol_target_soc_8_9", 95)
     rc_duration = datadict.get("remotecontrol_duration", 20)
@@ -246,17 +238,18 @@ def value_function_powercontrolmode8_recompute(initval, descr, datadict):
     houseload = value_function_house_load(initval, descr, datadict)
 
     if power_control == "Mode 8 - PV and BAT control - Duration":
-        pass # capping of import is done later
+        pvlimit = setpvlimit # import capping is done later
     elif power_control == "Negative Injection Price":  # grid export zero; PV restricted to house_load and battery charge
-        if battery_capacity >= 92: pvlimit = houseload + abs(pvlimit) * (100.0 - battery_capacity)/20.0 # slow down charging - nearly full
-        _LOGGER.info(f"pvlimit {pvlimit} batcap {battery_capacity}") 
-        pushmode_power = houseload - pv # or should we use pvlimit ?
+        pushmode_power = houseload - pv
+        if battery_capacity >= 92: pvlimit = houseload + abs(setpvlimit) * (100.0 - battery_capacity)/15.0 # slow down charging - nearly full
+        else: pvlimit = setpvlimit + houseload
+        _LOGGER.debug(f"***debug*** setpvlimit: {setpvlimit} pvlimit: {pvlimit} pushmode: {pushmode_power} houseload:{houseload} pv: {pv} batcap: {battery_capacity}") 
 
     elif power_control == "Negative Injection and Consumption Price":  # disable PV, charge from grid
         pvlimit = 0 
-        pushmode_power = - import_limit
+        pushmode_power = houseload - import_limit
     elif power_control == "Disabled":
-        pass #autorepeat_duration = 10  # or zero - stop autorepeat since it makes no sense when disabled - ??? is this used ??
+        pvlimit = setpvlimit
     # limit import to max import (capacity tarif in some countries)
     old_pushmode_power = pushmode_power
     excess_import = houseload - pv - pushmode_power - import_limit
@@ -295,11 +288,12 @@ def value_function_powercontrolmode8_recompute(initval, descr, datadict):
         _LOGGER.warning(f"autorepeat mode 8 changed curmode: {curmode}; battery: {battery_capacity}; mode: {power_control}") 
     if power_control == "Disabled":
         autorepeat_stop(datadict, descr.key)
-        _LOGGER.info("Stopping mode 8 loop")
-        datadict["remotecontrol_power_control"] = "Disabled" # disable the remotecontrol Mode 1 loop 
-        autorepeat_stop_with_postaction(datadict,"remotecontrol_trigger") # trigger the remotecontrol mode 1 button for a single BUTTONREPEAT_POST action
+        _LOGGER.info("Stopping mode 8 loop by disabling mode 1")
+        return {'action': WRITE_MULTI_MODBUS, 'register': 0x7C , 'data': [  ( "remotecontrol_power_control", "Disabled", ), ]}
+        #datadict["remotecontrol_power_control"] = "Disabled" # disable the remotecontrol Mode 1 loop 
+        #autorepeat_stop_with_postaction(datadict,"remotecontrol_trigger") # trigger the remotecontrol mode 1 button for a single BUTTONREPEAT_POST action
     _LOGGER.debug(f"Evaluated remotecontrol_mode8_trigger: corrected/clamped values: {res}")
-    return res
+    return { 'action': WRITE_MULTI_MODBUS, 'data': res }
 
 def value_function_byteswapserial(initval, descr, datadict):
     if initval and not initval.startswith(("M", "X")):
@@ -424,7 +418,7 @@ BUTTON_TYPES = [
         allowedtypes=AC | HYBRID | GEN4 | GEN5,
         write_method=WRITE_MULTI_MODBUS,
         icon="mdi:battery-clock",
-        value_function=value_function_remotecontrol_recompute,
+        value_function=autorepeat_function_remotecontrol_recompute,
         autorepeat="remotecontrol_autorepeat_duration",
     ),
     SolaxModbusButtonEntityDescription(
@@ -434,7 +428,7 @@ BUTTON_TYPES = [
         allowedtypes=AC | HYBRID | GEN4 | GEN5,
         write_method=WRITE_MULTI_MODBUS,
         icon="mdi:battery-clock",
-        value_function=value_function_powercontrolmode8_recompute,
+        value_function=autorepeat_function_powercontrolmode8_recompute,
         autorepeat="remotecontrol_autorepeat_duration",
     ),
     SolaxModbusButtonEntityDescription(

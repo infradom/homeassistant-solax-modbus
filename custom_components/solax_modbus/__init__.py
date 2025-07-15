@@ -121,6 +121,9 @@ from .const import (
     BUTTONREPEAT_FIRST,
     BUTTONREPEAT_LOOP,
     BUTTONREPEAT_POST,
+    WRITE_MULTI_MODBUS,
+    WRITE_SINGLE_MODBUS,
+    WRITE_MULTISINGLE_MODBUS,
 )
 
 PLATFORMS = [Platform.BUTTON, Platform.NUMBER, Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
@@ -724,13 +727,13 @@ class SolaXModbusHub:
         try:
             res = await self.async_read_modbus_registers_all(group)
         except ConnectionException as ex:
-            _LOGGER.error("Reading data failed! Inverter is offline.")
+            _LOGGER.error(f"Reading data failed! Inverter is offline. {ex}")
             res = False
         except ModbusIOException as ex:
             _LOGGER.error(f"ModbusIOError: {ex}")
             res = False
         except Exception as ex:
-            _LOGGER.exception("Something went wrong reading from modbus")
+            _LOGGER.exception(f"Something went wrong reading from modbus: {ex}")
             res = False
         return res
 
@@ -957,24 +960,33 @@ class SolaXModbusHub:
             buttondescr = self.computedButtons[k]
             if self.last_ts < v:
                 payload = buttondescr.value_function(BUTTONREPEAT_LOOP, buttondescr, self.data) # initval = 1 means autorepeat run
-                _LOGGER.debug(f"ready to repeat button {k} data: {payload}")
-                await self.async_write_registers_multi(
-                    unit=self._modbus_addr,
-                    address=buttondescr.register,
-                    payload=payload,
-                )
+                if payload:
+                    reg = payload.get("register", buttondescr.register)
+                    action = payload.get("action")
+                    if not action: __LOGGER.error(f"autorepeat value function for {k} must return dict containing action")
+                    else:
+                        if action == WRITE_MULTI_MODBUS:
+                            _LOGGER.debug(f"**debug** ready to repeat button {k} data: {payload}")
+                            await self.async_write_registers_multi(
+                                unit=self._modbus_addr,
+                                address=reg,
+                                payload=payload.get('data'),
+                            )
             else: # expired autorepeats
                 if self.data["_repeatUntil"][k] > 0: # expired recently
                     self.data["_repeatUntil"][k] = 0 # mark as finally expired, no further buttonrepeat post after this one
                     _LOGGER.info(f"calling final value function POST for {k} with initval {BUTTONREPEAT_POST}")
                     payload = buttondescr.value_function(BUTTONREPEAT_POST, buttondescr, self.data)  # None means no final call after expiration
-                    if payload: 
-                        _LOGGER.info(f"terminating loop {k} - ready to send final payload data: {payload}")
-                        await self.async_write_registers_multi(
-                            unit=self._modbus_addr,
-                            address=buttondescr.register,
-                            payload=payload,
-                        )
+                    if payload:
+                        reg = payload.get("register", buttondescr.register)
+                        action = payload.get("action")
+                        if action == WRITE_MULTI_MODBUS:
+                            _LOGGER.info(f"terminating loop {k} - ready to send final payload data: {payload}")
+                            await self.async_write_registers_multi(
+                                unit=self._modbus_addr,
+                                address=reg,
+                                payload=payload.get('data'),
+                            )
         return res
 
 

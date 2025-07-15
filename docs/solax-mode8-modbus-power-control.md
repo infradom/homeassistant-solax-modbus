@@ -37,7 +37,7 @@ The integration hides this complexity and implements one button to trigger a sin
 * **remotecontrol_power_control_mode**: Select the submode:
   * **Disabled**
   * **Mode 8 - PV and Bat control - Duration**: this is the manual fixed mode that uses fixed remeotecontrol_pv_power_limit and fixed remotecontrol_push_mode_8_9 settings. The same behavior can probably be achieved with the _direct version of the entities (without autorepeat loop)
-  * **Negative Injection Price**: in this submode, PV will charge the battery and feed the house load, but once the battery is fully charged, PV will be reduced to house load so that no export takes place. The autorepeat mechanism is essential to adapt to the varying PV power or house load.
+  * **Negative Injection Price**: in this submode, PV will charge the battery and feed the house load, but once the battery is fully charged, PV will be reduced to house load so that no export takes place. The autorepeat mechanism is essential to adapt to the varying PV power or house load. If there is still some remaining export (probably because there is a limit on the possible charging power), reduce the remotecontrol_pv_power_limit parameter. In this submode, remotecontrol_pv_power_limit will be interpreted as maximum battery charge power.
   * **Negative Injection and Consumption Price**: In this submode, PV will be limited to zero and battery will be charged from the grid (house load also from grid)
 * remotecontrol_pv_power_limit: maximum PV power; is automatically recomputed in the Negative Price submodes. an initial max value is needed however
 * remotecontrol_push_mode_power_8_9: positive numbers are discharge, negative numbers charge; is automatically computed in the Negative Price submodes
