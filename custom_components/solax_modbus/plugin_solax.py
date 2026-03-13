@@ -567,6 +567,7 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
     if initval == BUTTONREPEAT_POST:
         datadict["remotecontrol_current_pushmode_power"] = None
         datadict["remotecontrol_current_pv_power_limit"] = None
+        datadict.pop("house_load_previous")
         return {
             "action": WRITE_MULTI_MODBUS,
             "data": [
@@ -590,21 +591,23 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
     timeout_motion = datadict.get("remotecontrol_timeout_next_motion", "VPP Off")
     pv = datadict.get("pv_power_total", 0)
     houseload = value_function_house_load(initval, descr, datadict)
+    houseload_previous = datadict.get("house_load_previous", houseload) # fetch previous value
+    datadict("house_load_previous") = houseload # save current as previous
     houseload_alt = value_function_house_load_alt(initval, descr, datadict)
 
     if power_control == "Mode 8 - PV and BAT control - Duration":
         pvlimit = setpvlimit  # import capping is done later
     elif power_control == "Negative Injection Price":  # grid export zero; PV restricted to house_load and battery charge
         datadict.get("measured_power", 0)  # positive for export, negative for import - for future correction purposes
-        houseload = max(0, houseload)
+        houseload_avg = max(0, (houseload + houseload_previous)/2.0 ) # smoothen house load to avoid oscillations
         if battery_capacity >= 92:
-            pvlimit = houseload + abs(setpvlimit) * (100.0 - battery_capacity) / 15.0 + 60  # slow down charging - nearly full
+            pvlimit = houseload_avg + abs(setpvlimit) * (100.0 - battery_capacity) / 15.0 + 60  # slow down charging - nearly full
         else:
-            pvlimit = setpvlimit + houseload + 60  # inverter overhead 40
-        pvlimit = max(houseload, pvlimit)
-        pushmode_power = houseload - min(pv, pvlimit) - 90 + pv / 14  # some kind of empiric correction for losses - machine learning would be better
+            pvlimit = setpvlimit + houseload_avg + 60  # inverter overhead 40
+        pvlimit = max(houseload_avg, pvlimit)
+        pushmode_power = houseload_avg - min(pv, pvlimit) - 90 + pv / 14  # some kind of empiric correction for losses - machine learning would be better
         _LOGGER.debug(
-            f"***debug*** setpvlimit: {setpvlimit} pvlimit: {pvlimit} pushmode: {pushmode_power} houseload:{houseload} pv: {pv} batcap: {battery_capacity}"
+            f"***debug*** setpvlimit: {setpvlimit} pvlimit: {pvlimit} pushmode: {pushmode_power} houseload avg:{houseload_avg} pv: {pv} batcap: {battery_capacity}"
         )
 
     elif power_control == "Negative Injection and Consumption Price":  # disable PV, charge from grid
@@ -936,7 +939,6 @@ def value_function_house_load(initval: int, descr: Any, datadict: dict[str, Any]
     measured_power = int(datadict.get("measured_power", 0))
     meter_2_power = int(datadict.get("meter_2_measured_power", 0))
     result = inverter_power - measured_power + meter_2_power
-
     _LOGGER.debug(
         "[HOUSE_LOAD] Calculation: "
         f"inverter_power={inverter_power}W "
