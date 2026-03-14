@@ -592,7 +592,7 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
     pv = datadict.get("pv_power_total", 0)
     houseload = value_function_house_load(initval, descr, datadict)
     houseload_previous = datadict.get("house_load_previous", houseload) # fetch previous value
-    datadict("house_load_previous") = houseload # save current as previous
+    datadict["house_load_previous"] = houseload # save current as previous
     houseload_alt = value_function_house_load_alt(initval, descr, datadict)
 
     if power_control == "Mode 8 - PV and BAT control - Duration":
