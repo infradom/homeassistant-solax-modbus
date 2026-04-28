@@ -55,6 +55,12 @@ from .pymodbus_compat import DataType, convert_from_registers
 
 _LOGGER = logging.getLogger(__name__)
 
+_UNINITIALIZED_SELECT_DEFAULTS: dict[str, int] = {
+    "feedin_limitation_mode": 0,
+    "passive_mode_timeout": 0,
+    "passive_mode_timeout_action": 0,
+}
+
 """ ============================================================================================
 bitmasks  definitions to characterize inverters, organized by group
 these bitmasks are used in entity declarations to determine to which inverters the entity applies
@@ -158,6 +164,15 @@ class SofarModbusSensorEntityDescription(BaseModbusSensorEntityDescription):
     order32: str = "big"
     register_data_type: str = REGISTER_U16
     register_type: int = REG_HOLDING
+
+
+def validate_register_data(descr: Any, value: Any, datadict: dict[str, Any]) -> Any:
+    """Normalize known Sofar sentinel values before entities consume them."""
+    if value == 0xFFFF and descr.key in _UNINITIALIZED_SELECT_DEFAULTS:
+        normalized = _UNINITIALIZED_SELECT_DEFAULTS[descr.key]
+        _LOGGER.debug(f"Sofar: normalizing uninitialized register value for {descr.key} from 65535 to {normalized}")
+        return normalized
+    return value
 
 
 # ====================================== Computed value functions  =================================================
@@ -753,6 +768,8 @@ SELECT_TYPES = [
             3: "Passive Mode",
             4: "Peak Cut Mode",
             5: "Off-grid Mode",
+            6: "Generator mode",
+            7: "Feed-In Priority Mode",
         },
         allowedtypes=HYBRID,
         write_method=WRITE_MULTISINGLE_MODBUS,
@@ -3572,6 +3589,8 @@ SENSOR_TYPES: list[SofarModbusSensorEntityDescription] = [
             3: "Passive Mode",
             4: "Peak Cut Mode",
             5: "Off-grid Mode",
+            6: "Generator mode",
+            7: "Feed-In Priority Mode",
         },
         internal=True,
         allowedtypes=HYBRID,
@@ -4277,6 +4296,7 @@ plugin_instance = sofar_plugin(
     BUTTON_TYPES=BUTTON_TYPES,
     SELECT_TYPES=SELECT_TYPES,
     SWITCH_TYPES=[],
+    TIME_TYPES=[],
     BATTERY_CONFIG=battery_config(),
     block_size=48,
     order32="big",
