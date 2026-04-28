@@ -605,7 +605,6 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
     if initval == BUTTONREPEAT_POST:
         datadict["remotecontrol_current_pushmode_power"] = None
         datadict["remotecontrol_current_pv_power_limit"] = None
-        datadict.pop("house_load_previous")
         return {
             "action": WRITE_MULTI_MODBUS,
             "data": [
@@ -629,8 +628,6 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
     timeout_motion = datadict.get("remotecontrol_timeout_next_motion", "VPP Off")
     pv = datadict.get("pv_power_total", 0)
     houseload = value_function_house_load(initval, descr, datadict)
-    houseload_previous = datadict.get("house_load_previous", houseload) # fetch previous value
-    datadict["house_load_previous"] = houseload # save current as previous
     houseload_alt = value_function_house_load_alt(initval, descr, datadict)
 
     # Disallow parallel mode for now
@@ -641,7 +638,6 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
 
     if power_control == "Mode 8 - PV and BAT control - Duration":
         pvlimit = setpvlimit  # import capping is done later
-
     elif power_control == "Negative Injection Price":
         # --- Negative Injection Price (Mode 8 custom) ---
         # Controller goals:
