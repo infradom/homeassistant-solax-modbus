@@ -1057,6 +1057,7 @@ def value_function_house_load(initval: int, descr: Any, datadict: dict[str, Any]
     measured_power = int(datadict.get("measured_power", 0))
     meter_2_power = int(datadict.get("meter_2_measured_power", 0))
     result = inverter_power - measured_power + meter_2_power
+
     _LOGGER.debug(
         "[HOUSE_LOAD] Calculation: "
         f"inverter_power={inverter_power}W "
