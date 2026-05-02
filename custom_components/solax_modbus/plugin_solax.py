@@ -657,17 +657,16 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
         # bias towards import
         export_target = int(datadict.get("negative_injection_bias_w", -50) or -50)
         export_deadband_w = int(datadict.get("export_feedback_deadband_w", 50) or 50)
-        min_step_w = int(datadict.get("export_first_step_min_w", 100) or 100)
-        max_step_w = int(datadict.get("export_feedback_max_w", 500) or 500)
-        pv_unlimited_step = max(2 * max_step_w, int(datadict.get("pv_unlimited_delta_w", 1000) or 1000))
+        pv_unlimited_step = int(datadict.get("pv_unlimited_delta_w", 1000) or 1000)
 
         # Local copies
         battery_charge = max(0, int(datadict.get("battery_power_charge", 0) or 0))
         pvlimit = setpvlimit
         pv_threshold = pv + pv_unlimited_step  # point at which PV is considered to be not actively limited
         cur_pvlimit = max(0, setpvlimit if (cur_pvlimit := datadict.get("remotecontrol_current_pv_power_limit", None)) is None else cur_pvlimit)
-        cur_push = max(0, battery_charge if (cur_push := datadict.get("remotecontrol_current_pushmode_power", None)) is None else (0 - cur_push))
+        cur_push = max(0, (-battery_charge) if (cur_push := datadict.get("remotecontrol_current_pushmode_power", None)) is None else cur_push)
         pushmode_power = 0  # + = discharge, - = charge
+        current_charge = -cur_push
 
         # Debug inputs
         _LOGGER.debug(
@@ -687,19 +686,21 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
             # At/above target: PV can be increased to reduce import in bounded steps.
             # If PV is being actively limited, continue in this loop to release PV restriction slowly.
             measured_power = int(measured_power or 0)
-            surplus = cur_push + measured_power - export_target
+            surplus = current_charge + measured_power - export_target
             control_state = "surplus" if pv >= hl else "clipping"
 
             # Battery gets surplus up to BMS limit
             desired_charge, bms_cap_w, pct_cap_w = autorepeat_bms_charge(datadict, battery_capacity, max_charge_soc, surplus)
-            pushmode_power = -desired_charge
+
+            # Simple moving average filter to slow down changes to battery
+            selected_charge = (current_charge * 4 + desired_charge) / 5
+            pushmode_power = -selected_charge
 
             # Any surplus not able to feed into the battery needs to be corrected through PV limiting
-            error = surplus - desired_charge
+            error = surplus - selected_charge
 
             if abs(error) <= export_deadband_w:
-                step_w = 0
-                pvlimit = cur_pvlimit
+                target_pvlimit = cur_pvlimit
                 control_reason = "hold"
             elif error > 0:
                 if cur_pvlimit > pv_threshold:
@@ -710,17 +711,19 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
                     control_reason = "decrease-pv-fast"
                 else:
                     control_reason = "decrease-pv"
-                step_w = min(max_step_w, max(min_step_w, error))
-                pvlimit = max(0, cur_pvlimit - step_w)
+                target_pvlimit = max(0, cur_pvlimit - error)
             else:
-                step_w = min(max_step_w, max(min_step_w, -error))
-                pvlimit = min(setpvlimit, cur_pvlimit + step_w)
+                target_pvlimit = min(setpvlimit, cur_pvlimit - error)
                 control_reason = "increase-pv"
+
+            # Simple moving average filter to slow down changes to PV limit
+            pvlimit = (cur_pvlimit * 4 + target_pvlimit) / 5
 
             _LOGGER.debug(
                 f"[Mode8 Negative Injection] {control_state}: surplus={surplus}W measured_power={measured_power}W "
-                f"export_target={export_target}W error={error}W step={step_w}W reason={control_reason} "
-                f"bms_cap≈{bms_cap_w}W pct_cap={pct_cap_w}W -> charge={desired_charge}W pvlimit={pvlimit}W hl={hl}W"
+                f"export_target={export_target}W error={error}W pvtarget={target_pvlimit}W reason={control_reason} "
+                f"bms_cap≈{bms_cap_w}W pct_cap={pct_cap_w}W desired_charge={desired_charge}W -> charge={selected_charge}W "
+                f"pvlimit={pvlimit}W hl={hl}W"
             )
 
         else:
@@ -739,7 +742,12 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
 
     elif power_control == "Negative Injection and Consumption Price":  # disable PV, charge from grid
         pvlimit = 0
-        pushmode_power = houseload - import_limit
+        cur_push = max(0, (-battery_charge) if (cur_push := datadict.get("remotecontrol_current_pushmode_power", None)) is None else cur_push)
+        current_charge = -cur_push
+        desired_charge = import_limit - house_load
+        # Simple moving average filter to slow down changes to battery
+        selected_charge = (current_charge * 4 + desired_charge) / 5
+        pushmode_power = -selected_charge
     elif power_control == "Enabled Feedin Priority":
         pvlimit = setpvlimit
         pushmode_power = max(houseload - pv, 0.0)
