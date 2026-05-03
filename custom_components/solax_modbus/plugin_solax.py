@@ -761,9 +761,17 @@ def autorepeat_function_powercontrolmode8_recompute(initval: int, descr: Any, da
     elif power_control == "Negative Injection and Consumption Price":  # disable PV, charge from grid
         pvlimit = 0
         battery_charge = max(0, int(datadict.get("battery_power_charge", 0) or 0))
+        max_charge_soc = min(target_soc, datadict.get("battery_charge_upper_soc", 100))
+        #measured_power = datadict.get("measured_power", None)
+        #measured_power = int(measured_power or 0)
         cur_push = (-battery_charge) if (cur_push := datadict.get("remotecontrol_current_pushmode_power", None)) is None else cur_push
+        pushmode_power = 0  # + = discharge, - = charge
         current_charge = -cur_push
-        desired_charge = import_limit - house_load
+
+        available = import_limit - house_load # or ( current_charge + measured_power + import_limit  )
+        desired_charge, max_charge, bms_cap_w, pct_cap_w = autorepeat_bms_charge(datadict, battery_capacity, max_charge_soc, available)
+        # import will be limited later to import_limit
+        ##  desired_charge = import_limit - house_load
         # Simple moving average filter to slow down changes to battery
         selected_charge = autorepeat_setpoint_filter(current_charge, desired_charge)
         pushmode_power = -selected_charge
